@@ -1,0 +1,17 @@
+# deps / build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# env — never commit real secrets (.env.example is the template)
+.env
+!.env.example
+
+# relay state + local data
+.relay-state.json
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.log
