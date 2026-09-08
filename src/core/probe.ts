@@ -25,6 +25,10 @@ export interface ModelProbeStatus {
   upstream: ModelDef["upstream"];
   catalogAlive: boolean;
   vision: boolean;
+  /** Usable right now: listed upstream AND no failed probe. */
+  available: boolean;
+  /** Where `available` comes from: live probe, catalog only, or unavailable. */
+  availableVia: "probe" | "catalog" | "unavailable";
   probe: ProbeResult | null;
 }
 
@@ -143,27 +147,38 @@ export function getProbeStatus(): {
   ok: boolean;
   running: boolean;
   lastRunAt: string | null;
-  summary: { total: number; ok: number; failed: number; unknown: number };
+  summary: { total: number; available: number; ok: number; failed: number; unknown: number };
+  /** Ids usable right now (catalog-listed + no failed probe). */
+  available: string[];
   models: ModelProbeStatus[];
 } {
   const aliveSet = getAliveIds();
-  const models: ModelProbeStatus[] = ALL_MODELS.map((m) => ({
-    id: m.id,
-    upstream: m.upstream,
-    catalogAlive: !aliveSet || aliveSet.has(m.id),
-    vision: m.input.includes("image"),
-    probe: results.get(m.id) ?? null,
-  }));
+  const models: ModelProbeStatus[] = ALL_MODELS.map((m) => {
+    const catalogAlive = !aliveSet || aliveSet.has(m.id);
+    const probe = results.get(m.id) ?? null;
+    const available = catalogAlive && (!probe || probe.ok);
+    return {
+      id: m.id,
+      upstream: m.upstream,
+      catalogAlive,
+      vision: m.input.includes("image"),
+      available,
+      availableVia: !available ? "unavailable" : probe ? "probe" : "catalog",
+      probe,
+    };
+  });
   return {
     ok: true,
     running: isProbeRunning(),
     lastRunAt,
     summary: {
       total: models.length,
+      available: models.filter((m) => m.available).length,
       ok: models.filter((m) => m.probe?.ok).length,
       failed: models.filter((m) => m.probe && !m.probe.ok).length,
       unknown: models.filter((m) => !m.probe).length,
     },
+    available: models.filter((m) => m.available).map((m) => m.id),
     models,
   };
 }

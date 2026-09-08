@@ -16,7 +16,18 @@ async function fetchIds(url: string, headers: Record<string, string>): Promise<S
   }
 }
 
-export async function runHealthCheck(): Promise<{ opencode: number; kilo: number; total: number }> {
+export interface AliveModel {
+  id: string;
+  name: string;
+  upstream: string;
+}
+
+export async function runHealthCheck(): Promise<{
+  opencode: number;
+  kilo: number;
+  total: number;
+  models: AliveModel[];
+}> {
   const [oc, kilo] = await Promise.all([
     fetchIds(`${config.upstreamOpencode}/v1/models`, opencodeHeaders()),
     fetchIds(`${config.upstreamKilo.replace(/\/$/, "")}/models`, {
@@ -32,14 +43,22 @@ export async function runHealthCheck(): Promise<{ opencode: number; kilo: number
       if (!kilo || kilo.has(m.id)) alive.add(m.id);
     }
   }
-  if (oc === null && kilo === null) {
+  const bothDown = oc === null && kilo === null;
+  if (bothDown) {
     setAliveIds(null); // total outage → serve static
     log("warn", "health-check: both upstreams unreachable, serving static catalog");
   } else {
     setAliveIds(alive);
   }
-  const ocN = ALL_MODELS.filter((m) => m.upstream === "opencode" && alive.has(m.id)).length;
-  const kiloN = ALL_MODELS.filter((m) => m.upstream === "kilo" && alive.has(m.id)).length;
-  log("info", `health-check: opencode=${ocN} kilo=${kiloN}`);
-  return { opencode: ocN, kilo: kiloN, total: alive.size };
+  const listed = bothDown ? ALL_MODELS : ALL_MODELS.filter((m) => alive.has(m.id));
+  const models: AliveModel[] = listed.map((m) => ({
+    id: m.id,
+    name: m.name,
+    upstream: m.upstream,
+  }));
+  const ocN = models.filter((m) => m.upstream === "opencode").length;
+  const kiloN = models.filter((m) => m.upstream === "kilo").length;
+  log("info", `health-check: opencode=${ocN} kilo=${kiloN} total=${models.length}`);
+  log("info", `available models (${models.length}): ${models.map((m) => m.id).join(", ")}`);
+  return { opencode: ocN, kilo: kiloN, total: models.length, models };
 }

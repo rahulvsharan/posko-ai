@@ -325,6 +325,7 @@ tiny non-stream request per model (`"Reply with exactly OK."`, `PROBE_MAX_TOKENS
 `muse-spark-*`, chat for the rest. Results cached in-memory
 `{ok, latencyMs, checkedAt, statusCode, error}`.
 
-* `GET /v1/admin/models/status` → `{running, lastRunAt, summary:{total,ok,failed,unknown}, models:[{id, upstream, catalogAlive, vision, probe|null}]}` (always 200; `probe:null` = not yet probed).
+* `GET /v1/admin/models/status` → `{running, lastRunAt, summary:{total,available,ok,failed,unknown}, available:[ids usable now], models:[{id, upstream, catalogAlive, vision, available, availableVia: probe|catalog|unavailable, probe|null}]}` (always 200; `probe:null` = not yet probed; `available` = catalog-listed + no failed probe).
 * `POST /v1/admin/models/probe` (`{models?: string[]}`) → `202` background run, `409` if already running, `404` on unknown ids. Costs ~1 upstream request/model — on demand only.
 * `GET /health` additionally carries `probe:{running, lastRunAt, summary}`.
+* Boot log prints the available list: `available models (24): mimo-v2.5-free, ...` (from `runHealthCheck`, which now returns `{models:[{id,name,upstream}]}`).

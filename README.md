@@ -159,8 +159,10 @@ curl -X POST $BASE_URL/admin/models/probe -H "Authorization: Bearer $API_KEY" \
 
 # poll until running:false
 curl $BASE_URL/admin/models/status -H "Authorization: Bearer $API_KEY"
-# → {running, lastRunAt, summary:{total,ok,failed,unknown},
-#    models:[{id, upstream, catalogAlive, vision, probe:{ok,latencyMs,checkedAt,statusCode,error}|null}]}
+# → {running, lastRunAt, summary:{total,available,ok,failed,unknown},
+#    available: ["mimo-v2.5-free", ...],   # usable right now
+#    models:[{id, upstream, catalogAlive, vision, available, availableVia: probe|catalog|unavailable,
+#             probe:{ok,latencyMs,checkedAt,statusCode,error}|null}]}
 ```
 
 Notes: `409` means a probe is already running. Probes consume upstream quota (kilo 200/hr, opencode 200/day), so trigger on demand, not on an interval. Probe knobs: `PROBE_TIMEOUT_MS` (default 25000), `PROBE_CONCURRENCY` (default 4), `PROBE_MAX_TOKENS` (default 8). `/health` also carries a `probe` summary once a run has finished.

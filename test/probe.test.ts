@@ -61,6 +61,17 @@ describe("runProbeAll + getProbeStatus", () => {
     expect(s.summary.failed).toBe(1);
     expect(s.summary.unknown).toBe(ALL_MODELS.length - 3);
     expect(s.lastRunAt).toBeTruthy();
+    // available now: everything except the failed probe
+    expect(s.summary.available).toBe(ALL_MODELS.length - 1);
+    expect(s.available).not.toContain("big-pickle");
+    expect(s.available).toContain("mimo-v2.5-free");
+    const byId = new Map(s.models.map((m) => [m.id, m]));
+    expect(byId.get("mimo-v2.5-free")?.available).toBe(true);
+    expect(byId.get("mimo-v2.5-free")?.availableVia).toBe("probe");
+    expect(byId.get("big-pickle")?.available).toBe(false);
+    expect(byId.get("big-pickle")?.availableVia).toBe("unavailable");
+    expect(byId.get("kilo-auto/free")?.availableVia).toBe("probe");
+    expect(byId.get("openrouter/free")?.availableVia).toBe("catalog");
   });
 
   test("unknown model id throws", async () => {
