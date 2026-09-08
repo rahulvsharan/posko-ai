@@ -12,6 +12,9 @@ export interface GatewayConfig {
   maxImageMb: number;
   maxImagesPerMessage: number;
   logLevel: string;
+  probeTimeoutMs: number;
+  probeConcurrency: number;
+  probeMaxTokens: number;
 }
 
 function num(v: string | undefined, fallback: number): number {
@@ -33,6 +36,9 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): G
     maxImageMb: num(env.MAX_IMAGE_MB, 20),
     maxImagesPerMessage: num(env.MAX_IMAGES_PER_MESSAGE, 8),
     logLevel: env.LOG_LEVEL ?? "info",
+    probeTimeoutMs: num(env.PROBE_TIMEOUT_MS, 25_000),
+    probeConcurrency: num(env.PROBE_CONCURRENCY, 4),
+    probeMaxTokens: num(env.PROBE_MAX_TOKENS, 8),
   };
 }
 

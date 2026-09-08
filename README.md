@@ -77,6 +77,9 @@ All fields live in `.env.example` / environment. Invalid numbers fall back to de
 | `MAX_IMAGE_MB` | `20` | Max **decoded** image bytes per `data:` URL. Checked by math (`len*3/4 - pad`, no alloc). Over → `400 image_too_large`, never forwarded. |
 | `MAX_IMAGES_PER_MESSAGE` | `8` | Max `image_url`/`input_image` parts per message. Over → `400`. `https:` and `data:` share the counter. |
 | `LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error`. Structured `[posko-ai]` logs; boot prints listen line + `health-check: opencode=N kilo=M`. |
+| `PROBE_TIMEOUT_MS` | `25000` | Per-model timeout for `POST /v1/admin/models/probe`. Timeout → `probe.ok:false, error:"probe timeout..."`. |
+| `PROBE_CONCURRENCY` | `4` | How many models are probed in parallel. Higher = faster full run, burstier on quotas. |
+| `PROBE_MAX_TOKENS` | `8` | `max_tokens` / `max_output_tokens` of the probe prompt — keep tiny to save quota. |
 
 ## Endpoints
 
@@ -89,6 +92,8 @@ All fields live in `.env.example` / environment. Invalid numbers fall back to de
 | `POST /v1/responses` | yes | Responses API — **only** for `muse-spark-1.3/1.2-contributor-free`; other models get `400` with chat hint |
 | `GET /v1/admin/relay/status` | yes | Current `{enabled, url}` |
 | `POST /v1/admin/relay` | yes | `{"enabled":true,"url":"https://..."}` — switch egress live, persisted to `~/.config/posko-ai/relay.json` |
+| `GET /v1/admin/models/status` | yes | Per-model live status: catalog membership + last inference probe (`ok/latency/error/checkedAt`) + summary counts |
+| `POST /v1/admin/models/probe` | yes | Trigger a live probe (tiny inference per model, `202` + background run; optional `{"models":["id",...]}` subset). Poll `GET .../status` |
 
 Chat example (streaming):
 
@@ -137,6 +142,28 @@ curl -X POST http://127.0.0.1:47831/v1/admin/relay \
 ```
 
 Back to direct: `{"enabled":false}`. State persists across restarts.
+
+## Model status (live probe)
+
+Boot health-check only proves catalog membership. To prove a model actually answers, trigger a probe — one tiny inference per model (`"Reply with exactly OK."`, `max_tokens: 8`):
+
+```bash
+# all models (background run, ~1 upstream request per model)
+curl -X POST $BASE_URL/admin/models/probe -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" -d '{}'
+# → {"ok":true,"started":true,"running":true,"targets":26}
+
+# subset only (cheaper on quota)
+curl -X POST $BASE_URL/admin/models/probe -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" -d '{"models":["kilo-auto/free","mimo-v2.5-free"]}'
+
+# poll until running:false
+curl $BASE_URL/admin/models/status -H "Authorization: Bearer $API_KEY"
+# → {running, lastRunAt, summary:{total,ok,failed,unknown},
+#    models:[{id, upstream, catalogAlive, vision, probe:{ok,latencyMs,checkedAt,statusCode,error}|null}]}
+```
+
+Notes: `409` means a probe is already running. Probes consume upstream quota (kilo 200/hr, opencode 200/day), so trigger on demand, not on an interval. Probe knobs: `PROBE_TIMEOUT_MS` (default 25000), `PROBE_CONCURRENCY` (default 4), `PROBE_MAX_TOKENS` (default 8). `/health` also carries a `probe` summary once a run has finished.
 
 ## Troubleshooting
 

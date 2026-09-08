@@ -316,3 +316,15 @@ export function decodedBase64Bytes(payload: string): number {
 }
 // usage: if (decodedBase64Bytes(b64) > MAX_IMAGE_MB*1048576) return 400 image_too_large
 ```
+
+## 13. Live probe + status API (branch `model-probe-status`)
+
+Boot health-check proves catalog membership only. `src/core/probe.ts` proves inference works:
+tiny non-stream request per model (`"Reply with exactly OK."`, `PROBE_MAX_TOKENS=8`,
+`PROBE_TIMEOUT_MS=25000`, `PROBE_CONCURRENCY=4`), responses-API for
+`muse-spark-*`, chat for the rest. Results cached in-memory
+`{ok, latencyMs, checkedAt, statusCode, error}`.
+
+* `GET /v1/admin/models/status` → `{running, lastRunAt, summary:{total,ok,failed,unknown}, models:[{id, upstream, catalogAlive, vision, probe|null}]}` (always 200; `probe:null` = not yet probed).
+* `POST /v1/admin/models/probe` (`{models?: string[]}`) → `202` background run, `409` if already running, `404` on unknown ids. Costs ~1 upstream request/model — on demand only.
+* `GET /health` additionally carries `probe:{running, lastRunAt, summary}`.
