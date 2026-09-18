@@ -2,7 +2,15 @@ import type { GatewayProvider } from "./base.js";
 import type { ProviderCtx } from "../core/types.js";
 import { config } from "../config.js";
 import { MODEL_MAP, upstreamOf } from "../core/model-registry.js";
-import { opencodeHeaders } from "../utils/headers.js";
+import {
+  assembleChatCompletion,
+  assembleResponses,
+  mintMessageId,
+  mintSessionId,
+  wrapChatForZen,
+  wrapResponsesForZen,
+  zenHeaders,
+} from "./zen-identity.js";
 import { relayFetch, clampForRelay } from "../relay/client.js";
 import { passthroughSSE } from "../core/stream.js";
 
@@ -102,22 +110,43 @@ export const opencodeProvider: GatewayProvider = {
       return opencodeProvider.responses!(responsesBody, ctx);
     }
 
-    const payload = clampForRelay(body);
-    const isStream = payload.stream === true;
+    // Zen free tier only answers stream:true requests that carry the exact
+    // opencode system prompt + tools (see zen-identity.ts). Always request
+    // SSE upstream; assemble a single JSON object when the client asked for
+    // non-streaming.
+    const clientWantsStream = body.stream === true;
+    const payload = clampForRelay(wrapChatForZen(body));
     const url = `${config.upstreamOpencode.replace(/\/$/, "")}/v1/chat/completions`;
     const upstream = await relayFetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...opencodeHeaders() },
+      headers: zenHeaders(mintSessionId(), mintMessageId()),
       body: JSON.stringify(payload),
       signal: ctx.signal ?? AbortSignal.timeout(300_000),
     });
-    if (isStream && upstream.body) return passthroughSSE(upstream);
+    if (!upstream.ok) {
+      const text = await upstream.text();
+      const ct = upstream.headers.get("content-type") ?? "application/json";
+      return new Response(text, { status: upstream.status, headers: { "content-type": ct } });
+    }
+    if (clientWantsStream && upstream.body) return passthroughSSE(upstream);
     const text = await upstream.text();
-    const ct = upstream.headers.get("content-type") ?? "application/json";
-    return new Response(text, { status: upstream.status, headers: { "content-type": ct } });
+    const ct = upstream.headers.get("content-type") ?? "";
+    if (ct.includes("application/json")) {
+      try {
+        const maybe = JSON.parse(text) as Record<string, unknown>;
+        if (maybe.object === "chat.completion") {
+          return new Response(text, { status: upstream.status, headers: { "content-type": "application/json" } });
+        }
+      } catch {
+        // fall through to SSE assembly
+      }
+    }
+    const assembled = assembleChatCompletion(text, modelId);
+    return Response.json(assembled, { status: 200 });
   },
   async responses(body: Record<string, unknown>, ctx: ProviderCtx): Promise<Response> {
-    const payload = { ...clampForRelay(body) };
+    const sessionId = mintSessionId();
+    const payload = { ...clampForRelay(wrapResponsesForZen(body, sessionId)) };
     // pi-bansos note: suppress unsupported reasoning.effort:"none" for Muse when reasoning off
     const reasoning = payload.reasoning as Record<string, unknown> | undefined;
     if (reasoning && reasoning.effort === "none") {
@@ -125,17 +154,23 @@ export const opencodeProvider: GatewayProvider = {
       void _drop;
       payload.reasoning = rest;
     }
-    const isStream = payload.stream === true;
+    const clientWantsStream = body.stream === true;
     const url = `${config.upstreamOpencode.replace(/\/$/, "")}/v1/responses`;
     const upstream = await relayFetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...opencodeHeaders() },
+      headers: zenHeaders(sessionId, mintMessageId()),
       body: JSON.stringify(payload),
       signal: ctx.signal ?? AbortSignal.timeout(300_000),
     });
-    if (isStream && upstream.body) return passthroughSSE(upstream);
+    if (!upstream.ok) {
+      const text = await upstream.text();
+      const ct = upstream.headers.get("content-type") ?? "application/json";
+      return new Response(text, { status: upstream.status, headers: { "content-type": ct } });
+    }
+    if (clientWantsStream && upstream.body) return passthroughSSE(upstream);
     const text = await upstream.text();
-    const ct = upstream.headers.get("content-type") ?? "application/json";
-    return new Response(text, { status: upstream.status, headers: { "content-type": ct } });
+    const assembled = assembleResponses(text);
+    if (assembled) return Response.json(assembled, { status: 200 });
+    return new Response(text, { status: upstream.status, headers: { "content-type": "text/event-stream" } });
   },
 };

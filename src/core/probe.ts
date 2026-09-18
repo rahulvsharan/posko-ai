@@ -43,7 +43,8 @@ async function defaultCall(model: ModelDef, signal: AbortSignal): Promise<Respon
   const ctx = { signal, clientIp: "probe", requestId: `probe-${randomUUID8()}` };
   if (model.api === "openai-responses" && opencodeProvider.responses) {
     return opencodeProvider.responses(
-      { model: model.id, input: PROBE_TEXT, stream: false, max_output_tokens: config.probeMaxTokens },
+      // Zen responses models reject max_output_tokens < 16.
+      { model: model.id, input: PROBE_TEXT, stream: false, max_output_tokens: Math.max(16, config.probeMaxTokens) },
       ctx,
     );
   }
