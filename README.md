@@ -167,6 +167,21 @@ curl $BASE_URL/admin/models/status -H "Authorization: Bearer $API_KEY"
 
 Notes: `409` means a probe is already running. Probes consume upstream quota (kilo 200/hr, opencode 200/day), so trigger on demand, not on an interval. Probe knobs: `PROBE_TIMEOUT_MS` (default 25000), `PROBE_CONCURRENCY` (default 4), `PROBE_MAX_TOKENS` (default 8). `/health` also carries a `probe` summary once a run has finished.
 
+## Zen free-tier identity (why OpenCode models work)
+
+Upstream (`opencode.ai` Console) only serves free-tier inference to requests that look like they come
+from within OpenCode, otherwise `403 FreeTierError`. The gateway handles this per request in
+`src/providers/zen-identity.ts`: current opencode `User-Agent`, `x-opencode-*` headers with freshly
+minted time-ordered `ses_`/`msg_` ids, `stream:true` upstream (assembled back to non-stream JSON when
+the client asked for `stream:false`), plus the exact opencode system/developer prompt + tool
+definitions embedded in `src/providers/zen-fingerprint.ts` (captured from genuine opencode 1.18.31
+runs; client messages and sampling params pass through untouched, client `tools` are replaced).
+
+If OpenCode models start failing with `403 FreeTierError` or `426 UpgradeRequired` after an opencode
+upgrade, refresh the two fingerprint inputs: run a real `opencode run` through a logging proxy
+(`baseURL` override to it), copy the chat system prompt + tools and the responses developer
+instructions + tools into `zen-fingerprint.ts`, and bump the `User-Agent` versions.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
