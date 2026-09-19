@@ -7,6 +7,8 @@ import {
   assembleResponses,
   mintMessageId,
   mintSessionId,
+  responsesJsonToChatCompletion,
+  responsesSseToChatSse,
   wrapChatForZen,
   wrapResponsesForZen,
   zenHeaders,
@@ -71,21 +73,23 @@ function chatMsgToResponses(msg: Record<string, unknown>): ResponsesMessage {
   return { type: "message", role, content: "" };
 }
 
-/** Convert a chat-completions body to a Responses API body. */
-function chatToResponses(body: Record<string, unknown>): Record<string, unknown> {
+/** Convert a chat-completions body to a Responses API body. Exported for tests. */
+export function chatToResponses(body: Record<string, unknown>): Record<string, unknown> {
   const messages = body.messages as Record<string, unknown>[] | undefined;
   if (!messages?.length) return body;
 
+  let input: unknown;
   // Fast path: single user message with string content → plain string input
   if (messages.length === 1) {
     const m = messages[0];
     if (m.role === "user" && typeof m.content === "string") {
-      return { ...body, input: m.content };
+      input = m.content;
     }
   }
-
   // General path: convert all messages
-  const input: ResponsesMessage[] = messages.map(chatMsgToResponses);
+  if (input === undefined) {
+    input = messages.map(chatMsgToResponses);
+  }
   const out: Record<string, unknown> = { ...body, input };
   delete out.messages;
   // Map max_tokens → max_output_tokens for Responses API
@@ -96,18 +100,74 @@ function chatToResponses(body: Record<string, unknown>): Record<string, unknown>
   return out;
 }
 
-export const opencodeProvider: GatewayProvider = {
-  id: "opencode",
+/** Wrap + POST to the Zen responses endpoint; returns the raw upstream. */
+async function postResponsesApi(body: Record<string, unknown>, ctx: ProviderCtx): Promise<Response> {
+  const sessionId = mintSessionId();
+  const payload = { ...clampForRelay(wrapResponsesForZen(body, sessionId)) };
+  // pi-bansos note: suppress unsupported reasoning.effort:"none" for Muse when reasoning off
+  const reasoning = payload.reasoning as Record<string, unknown> | undefined;
+  if (reasoning && reasoning.effort === "none") {
+    const { effort: _drop, ...rest } = reasoning;
+    void _drop;
+    payload.reasoning = rest;
+  }
+  const url = `${config.upstreamOpencode.replace(/\/$/, "")}/v1/responses`;
+  return relayFetch(url, {
+    method: "POST",
+    headers: zenHeaders(sessionId, mintMessageId()),
+    body: JSON.stringify(payload),
+    signal: cappedSignal(ctx),
+  });
+}
+
+/** Cap every upstream call: silent-forever streams must fail, not hang. */
+function cappedSignal(ctx: ProviderCtx, ms = 300_000): AbortSignal {
+  const cap = AbortSignal.timeout(ms);
+  return ctx.signal ? AbortSignal.any([ctx.signal, cap]) : cap;
+}
+
+/**
+ * Chat-protocol client talking to a responses-only model: convert outbound
+ * (chatToResponses) and translate the responses SSE/JSON back to chat shapes.
+ */
+async function chatViaResponses(body: Record<string, unknown>, ctx: ProviderCtx): Promise<Response> {
+  const modelId = body.model as string;
+  const clientWantsStream = body.stream === true;
+  const attempt = () => postResponsesApi(chatToResponses(body), ctx);
+  const upstream = await attempt();
+  if (!upstream.ok) {
+    const text = await upstream.text();
+    const ct = upstream.headers.get("content-type") ?? "application/json";
+    return new Response(text, { status: upstream.status, headers: { "content-type": ct } });
+  }
+  if (clientWantsStream && upstream.body) {
+    // Stalled generations are per-request upstream flakiness: swap in a
+    // fresh attempt transparently instead of hanging the client stream.
+    // 30s silence (no deltas — keepalives don't count) × 3 attempts keeps
+    // worst case ~90s, inside Hermes' patience window.
+    return responsesSseToChatSse(upstream, modelId, {
+      stallTimeoutMs: 30_000,
+      maxStallRetries: 2,
+      onStallRetry: attempt,
+    });
+  }
+  const text = await upstream.text();
+  const assembled = assembleResponses(text);
+  if (assembled) return Response.json(responsesJsonToChatCompletion(assembled, modelId), { status: 200 });
+  return new Response(text, { status: upstream.status, headers: { "content-type": "text/event-stream" } });
+}
+
+export const opencodeProvider: GatewayProvider = {  id: "opencode",
   owns(modelId: string): boolean {
     return upstreamOf(modelId) === "opencode";
   },
   async chat(body: Record<string, unknown>, ctx: ProviderCtx): Promise<Response> {
     const modelId = body.model as string;
 
-    // Bridge: Responses API models → translate chat format to responses format
+    // Bridge: Responses API models speak the responses endpoint upstream, but
+    // the client speaks chat — translate the protocol back on the way out.
     if (isResponsesModel(modelId)) {
-      const responsesBody = chatToResponses(body);
-      return opencodeProvider.responses!(responsesBody, ctx);
+      return chatViaResponses(body, ctx);
     }
 
     // Zen free tier only answers stream:true requests that carry the exact
@@ -121,7 +181,7 @@ export const opencodeProvider: GatewayProvider = {
       method: "POST",
       headers: zenHeaders(mintSessionId(), mintMessageId()),
       body: JSON.stringify(payload),
-      signal: ctx.signal ?? AbortSignal.timeout(300_000),
+      signal: cappedSignal(ctx),
     });
     if (!upstream.ok) {
       const text = await upstream.text();
@@ -145,23 +205,8 @@ export const opencodeProvider: GatewayProvider = {
     return Response.json(assembled, { status: 200 });
   },
   async responses(body: Record<string, unknown>, ctx: ProviderCtx): Promise<Response> {
-    const sessionId = mintSessionId();
-    const payload = { ...clampForRelay(wrapResponsesForZen(body, sessionId)) };
-    // pi-bansos note: suppress unsupported reasoning.effort:"none" for Muse when reasoning off
-    const reasoning = payload.reasoning as Record<string, unknown> | undefined;
-    if (reasoning && reasoning.effort === "none") {
-      const { effort: _drop, ...rest } = reasoning;
-      void _drop;
-      payload.reasoning = rest;
-    }
+    const upstream = await postResponsesApi(body, ctx);
     const clientWantsStream = body.stream === true;
-    const url = `${config.upstreamOpencode.replace(/\/$/, "")}/v1/responses`;
-    const upstream = await relayFetch(url, {
-      method: "POST",
-      headers: zenHeaders(sessionId, mintMessageId()),
-      body: JSON.stringify(payload),
-      signal: ctx.signal ?? AbortSignal.timeout(300_000),
-    });
     if (!upstream.ok) {
       const text = await upstream.text();
       const ct = upstream.headers.get("content-type") ?? "application/json";

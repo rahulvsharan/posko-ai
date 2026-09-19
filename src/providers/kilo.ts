@@ -15,7 +15,10 @@ export const kiloProvider: GatewayProvider = {
     return upstreamOf(modelId) === "kilo";
   },
   async chat(body: Record<string, unknown>, ctx: ProviderCtx): Promise<Response> {
-    const payload = clampForRelay(body);
+    const payload = { ...clampForRelay(body) };
+    // Kilo rejects the non-standard flat alias when it conflicts with the
+    // nested object (Hermes sends both). The nested `reasoning` stays.
+    delete payload.reasoning_effort;
     const isStream = payload.stream === true;
     const upstream = await relayFetch(kiloChatUrl(), {
       method: "POST",
