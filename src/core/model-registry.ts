@@ -1,5 +1,6 @@
-// Single source of truth — 26 models ported from pi-bansos-0.4.9
-// (KNOWN_MODELS 7 + KILO_MODELS 19). Boot health-check intersects with live catalogs.
+// Single source of truth — 23 models: OpenCode Zen (7) + KiloCode gateway (16).
+// Removed (upstream 404, models deleted): minimax-m3, minimax-m2.7,
+// thinkingmachines/inkling. Boot health-check intersects with live catalogs.
 import type { ModelDef, Upstream } from "./types.js";
 
 export const ALL_MODELS: ModelDef[] = [
@@ -11,7 +12,7 @@ export const ALL_MODELS: ModelDef[] = [
   { id: "nemotron-3-ultra-free", name: "Nemotron 3 Ultra Free", upstream: "opencode", reasoning: true, contextWindow: 1_000_000, maxTokens: 128_000, input: ["text"] },
   { id: "nemotron-3.5-lightning-free", name: "Nemotron 3.5 Lightning Free", upstream: "opencode", reasoning: true, contextWindow: 262_144, maxTokens: 262_144, input: ["text"] },
   { id: "big-pickle", name: "Big Pickle", upstream: "opencode", reasoning: true, contextWindow: 200_000, maxTokens: 32_000, input: ["text"] },
-  // ── KiloCode gateway (19) ──
+  // ── KiloCode gateway (16) ──
   { id: "kilo-auto/free", name: "Kilo Auto Free", upstream: "kilo", reasoning: false, contextWindow: 256_000, maxTokens: 10_000, input: ["text"] },
   { id: "stepfun/step-3.7-flash:free", name: "Step 3.7 Flash Free", upstream: "kilo", reasoning: true, contextWindow: 262_144, maxTokens: 262_144, input: ["text", "image"], thinkingFormat: "openrouter" },
   { id: "nvidia/nemotron-3-ultra-550b-a55b:free", name: "Nemotron 3 Ultra Free", upstream: "kilo", reasoning: true, contextWindow: 1_000_000, maxTokens: 65_536, input: ["text"], thinkingFormat: "openrouter" },
@@ -27,10 +28,7 @@ export const ALL_MODELS: ModelDef[] = [
   { id: "inclusionai/ling-3.0-flash-fin:free", name: "Ling 3.0 Flash Fin Free", upstream: "kilo", reasoning: true, contextWindow: 262_144, maxTokens: 32_768, input: ["text"], thinkingFormat: "openrouter" },
   { id: "liquid/lfm-2.5-2.6b:free", name: "Liquid LFM 2.5 2.6B Free", upstream: "kilo", reasoning: true, contextWindow: 65_536, maxTokens: 8_192, input: ["text"], thinkingFormat: "openrouter" },
   { id: "poolside/laguna-s-2.1:free", name: "Laguna S 2.1 Free", upstream: "kilo", reasoning: true, contextWindow: 262_144, maxTokens: 32_768, input: ["text"], thinkingFormat: "openrouter" },
-  { id: "minimax/minimax-m3:free", name: "MiniMax M3 Free", upstream: "kilo", reasoning: true, contextWindow: 1_048_576, maxTokens: 943_718, input: ["text", "image"], thinkingFormat: "openrouter" },
   { id: "thinkingmachines/inkling-small:free", name: "Inkling Small Free", upstream: "kilo", reasoning: true, contextWindow: 1_048_576, maxTokens: 262_144, input: ["text", "image"], thinkingFormat: "openrouter" },
-  { id: "thinkingmachines/inkling:free", name: "Inkling Free", upstream: "kilo", reasoning: true, contextWindow: 1_048_576, maxTokens: 262_144, input: ["text", "image"], thinkingFormat: "openrouter" },
-  { id: "minimax/minimax-m2.7:free", name: "MiniMax M2.7 Free", upstream: "kilo", reasoning: true, contextWindow: 196_608, maxTokens: 176_947, input: ["text"], thinkingFormat: "openrouter" },
 ];
 
 export const MODEL_MAP = new Map<string, ModelDef>(ALL_MODELS.map((m) => [m.id, m]));

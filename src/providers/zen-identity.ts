@@ -101,8 +101,12 @@ export function wrapChatForZen(body: Record<string, unknown>): Record<string, un
   if (!messages.some(isFingerprintSystem)) {
     messages.unshift({ role: "system", content: ZEN_CHAT_SYSTEM });
   }
+  // Drop the non-standard flat alias (some clients send both this and the
+  // nested `reasoning` object with conflicting values); keep `reasoning`.
+  const { reasoning_effort: _drop, ...rest } = body;
+  void _drop;
   return {
-    ...body,
+    ...rest,
     stream: true,
     messages,
     tools: ZEN_CHAT_TOOLS,
@@ -137,8 +141,14 @@ export function wrapResponsesForZen(body: Record<string, unknown>, sessionId: st
   if (!items.some(isFingerprintDeveloper)) {
     items.unshift({ role: "developer", content: ZEN_RESP_DEVELOPER });
   }
+  // Same flat-alias drop as chat: Zen rejects unknown parameters.
+  // Also drop response_format: the responses endpoint rejects it and some
+  // clients (Hermes title calls) attach it to every request.
+  const { reasoning_effort: _drop, response_format: _dropFmt, ...rest } = body;
+  void _drop;
+  void _dropFmt;
   return {
-    ...body,
+    ...rest,
     stream: true,
     input: items,
     tools: ZEN_RESP_TOOLS,
@@ -191,8 +201,7 @@ export function assembleChatCompletion(sseText: string, fallbackModel: string): 
 }
 
 /** Extract the completed response object from a responses event stream. */
-export function assembleResponses(sseText: string): Record<string, unknown> | null {
-  let last: Record<string, unknown> | null = null;
+export function assembleResponses(sseText: string): Record<string, unknown> | null {  let last: Record<string, unknown> | null = null;
   for (const line of sseText.split("\n")) {
     const t = line.trim();
     if (!t.startsWith("data:")) continue;
@@ -216,4 +225,257 @@ export function assembleResponses(sseText: string): Record<string, unknown> | nu
   // Fallback: a lone response object without envelope events.
   if (last && last.object === "response") return last;
   return null;
+}
+
+/** Pull plain text out of a responses output array (message items). */
+export function responsesOutputText(resp: Record<string, unknown>): string {
+  const out = resp.output;
+  if (!Array.isArray(out)) return "";
+  const parts: string[] = [];
+  for (const item of out) {
+    if (typeof item !== "object" || item === null) continue;
+    const it = item as Record<string, unknown>;
+    if (it.type !== "message" || !Array.isArray(it.content)) continue;
+    for (const part of it.content as Array<Record<string, unknown>>) {
+      if ((part.type === "output_text" || part.type === "text") && typeof part.text === "string") {
+        parts.push(part.text);
+      }
+    }
+  }
+  return parts.join("");
+}
+
+/** Convert an assembled responses object to a chat.completion object. */
+export function responsesJsonToChatCompletion(resp: Record<string, unknown>, fallbackModel: string): Record<string, unknown> {
+  const status = resp.status;
+  return {
+    id: (resp.id as string) ?? `chatcmpl-${Date.now()}`,
+    object: "chat.completion",
+    created: Math.floor(((resp.created_at as number) ?? Date.now() / 1000) / 1),
+    model: (resp.model as string) ?? fallbackModel,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: responsesOutputText(resp) },
+        finish_reason: status === "incomplete" ? "length" : "stop",
+      },
+    ],
+  };
+}
+
+function chatChunk(id: string, created: number, model: string, content: string | null, finish: string | null, role = false): string {
+  const delta: Record<string, unknown> = {};
+  if (role) delta.role = "assistant";
+  if (content !== null) delta.content = content;
+  return (
+    "data: " +
+    JSON.stringify({
+      id,
+      object: "chat.completion.chunk",
+      created,
+      model,
+      choices: [{ index: 0, delta, finish_reason: finish }],
+    }) +
+    "\n\n"
+  );
+}
+
+/**
+ * Translate a responses-protocol SSE stream into chat-completion chunks on
+ * the fly (for clients that spoke /v1/chat/completions to a responses-only
+ * model). Never buffers the whole body: transforms per line.
+ */
+export function responsesSseToChatSse(
+  upstream: Response,
+  fallbackModel: string,
+  opts?: {
+    stallTimeoutMs?: number;
+    /** Mint a fresh upstream attempt when stalled; return null to give up. */
+    onStallRetry?: () => Promise<Response | null>;
+    maxStallRetries?: number;
+  },
+): Response {
+  if (!upstream.body) throw new Error("upstream empty body");
+  // Fail fast instead of hanging forever: some free-tier streams go silent
+  // (keepalives only, no deltas) and never terminate. With onStallRetry the
+  // translator swaps in a fresh attempt transparently — stalled generations
+  // are per-request upstream flakiness, and the next attempt usually answers
+  // in seconds. Without it, the client stream errors so it can retry.
+  const stallTimeoutMs = opts?.stallTimeoutMs ?? 120_000;
+  const maxStallRetries = opts?.maxStallRetries ?? 1;
+  let reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buf = "";
+  let id = `chatcmpl-${Date.now()}`;
+  let created = Math.floor(Date.now() / 1000);
+  let model = fallbackModel;
+  let first = true;
+  let done = false;
+  let lastProgress = Date.now();
+  let stallRetries = 0;
+  let retrying = false;
+  let ctrl: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const finish = () => {
+    done = true;
+    clearInterval(watchdog);
+  };
+  const fail = (err: Error) => {
+    if (done) return;
+    finish();
+    reader.cancel().catch(() => {});
+    try {
+      ctrl?.error(err);
+    } catch {
+      // already closed/errored — ignore
+    }
+  };
+  const watchdog = setInterval(() => {
+    if (done || retrying) return;
+    if (Date.now() - lastProgress <= stallTimeoutMs) return;
+    const retry = stallRetries < maxStallRetries ? opts?.onStallRetry : undefined;
+    if (!retry) {
+      fail(new Error("upstream stall: no completion progress"));
+      return;
+    }
+    retrying = true;
+    void (async () => {
+      try {
+        const fresh = await retry();
+        if (done || !fresh?.body) {
+          await fresh?.body?.cancel().catch(() => {});
+          fail(new Error("upstream stall: no completion progress"));
+          return;
+        }
+        // Swap BEFORE cancelling the stale reader: any in-flight read on it
+        // resolves done and must be ignored (generation guard in pull),
+        // otherwise it would close the stream before the fresh body flows.
+        const stale = reader;
+        reader = fresh.body.getReader();
+        buf = "";
+        stallRetries++;
+        lastProgress = Date.now();
+        await stale.cancel().catch(() => {});
+      } catch (e) {
+        fail(e instanceof Error ? e : new Error(String(e)));
+      } finally {
+        retrying = false;
+      }
+    })();
+  }, Math.min(5000, Math.max(10, stallTimeoutMs)));
+  // Unref in runtimes that support it so tests/processes can exit.
+  (watchdog as unknown as { unref?: () => void }).unref?.();
+  const stream = new ReadableStream<Uint8Array>({
+    // Eager pump (not pull-driven): Bun 1.4.0 stops scheduling pull() after a
+    // pull that enqueues nothing (e.g. a chunk holding only a fragment of the
+    // giant response.created line), silently killing the stream. A background
+    // loop reading eagerly has no such dependency and delivers reliably.
+    start(controller) {
+      ctrl = controller;
+      void (async () => {
+        for (;;) {
+          const active = reader;
+          let value: Uint8Array | undefined;
+          let readerDone = false;
+          try {
+            ({ value, done: readerDone } = await active.read());
+          } catch {
+            finish();
+            try {
+              controller.close();
+            } catch {
+              // already closed — ignore
+            }
+            return;
+          }
+          if (active !== reader) continue; // swapped by stall retry — reread
+          if (done) {
+            try {
+              controller.close();
+            } catch {
+              // already closed — ignore
+            }
+            return;
+          }
+      if (value) buf += decoder.decode(value, { stream: true });
+      if (readerDone) {
+        if (buf.length > 0) buf += "\n";
+        else {
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          finish();
+          controller.close();
+          return;
+        }
+      }
+      let idx: number;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        // Forward keepalives as comments so clients with read timeouts don't
+        // drop the connection during long reasoning gaps with no deltas.
+        if (line === "" || line.startsWith(":")) {
+          if (line !== "") controller.enqueue(encoder.encode(line + "\n\n"));
+          continue;
+        }
+        if (line.startsWith("event:")) {
+          controller.enqueue(encoder.encode(": ping\n\n"));
+          continue;
+        }
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        let evt: Record<string, unknown>;
+        try {
+          evt = JSON.parse(payload) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        if (evt.type === "response.output_text.delta" && typeof evt.delta === "string") {
+          lastProgress = Date.now();
+          controller.enqueue(encoder.encode(chatChunk(id, created, model, evt.delta as string, null, first)));
+          first = false;
+        } else if (evt.type === "response.completed" || evt.type === "response.incomplete") {
+          lastProgress = Date.now();
+          const resp = evt.response as Record<string, unknown> | undefined;
+          if (resp) {
+            if (typeof resp.id === "string") id = resp.id;
+            if (typeof resp.created_at === "number") created = resp.created_at;
+            if (typeof resp.model === "string") model = resp.model;
+          }
+          const finishReason = evt.type === "response.incomplete" ? "length" : "stop";
+          controller.enqueue(encoder.encode(chatChunk(id, created, model, null, finishReason)));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          finish();
+          await reader.cancel().catch(() => {});
+          try {
+            controller.close();
+          } catch {
+            // already closed — ignore
+          }
+          return;
+        }
+      }
+      if (readerDone) {
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        finish();
+        try {
+          controller.close();
+        } catch {
+          // already closed — ignore
+        }
+      }
+        }
+      })();
+    },
+    cancel() {
+      finish();
+      reader.cancel().catch(() => {});
+    },
+  });
+  const h = new Headers();
+  h.set("content-type", "text/event-stream");
+  h.set("cache-control", "no-cache");
+  h.set("connection", "keep-alive");
+  h.set("x-accel-buffering", "no");
+  return new Response(stream, { status: upstream.status, headers: h });
 }

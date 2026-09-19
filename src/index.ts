@@ -35,6 +35,10 @@ if (isMain) {
   // Boot health-check in background (fail-open); don't block listen.
   runHealthCheck().catch((e) => log("warn", "boot health-check failed", { error: String(e) }));
   const app = createApp();
-  Bun.serve({ hostname: config.host, port: config.port, fetch: app.fetch });
+  // idleTimeout (seconds): SSE streams go quiet for tens of seconds while
+  // reasoning models think. Bun's default (10s) would kill such streams
+  // mid-flight; allow up to 255s of server-side silence (Bun's max) so
+  // clients time out on their own terms instead.
+  Bun.serve({ hostname: config.host, port: config.port, fetch: app.fetch, idleTimeout: 255 });
   log("info", `posko-ai listening on http://${config.host}:${config.port} (POST /v1/chat/completions, POST /v1/responses)`);
 }
