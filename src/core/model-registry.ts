@@ -1,6 +1,8 @@
-// Single source of truth — 23 models: OpenCode Zen (7) + KiloCode gateway (16).
+// Single source of truth — 22 models: OpenCode Zen (7) + KiloCode gateway (15).
 // Removed (upstream 404, models deleted): minimax-m3, minimax-m2.7,
-// thinkingmachines/inkling. Boot health-check intersects with live catalogs.
+// thinkingmachines/inkling. Removed (no tool-supporting endpoints upstream,
+// cannot drive an agent): nvidia/nemotron-3.5-content-safety:free.
+// Boot health-check intersects with live catalogs.
 import type { ModelDef, Upstream } from "./types.js";
 
 export const ALL_MODELS: ModelDef[] = [
@@ -12,7 +14,7 @@ export const ALL_MODELS: ModelDef[] = [
   { id: "nemotron-3-ultra-free", name: "Nemotron 3 Ultra Free", upstream: "opencode", reasoning: true, contextWindow: 1_000_000, maxTokens: 128_000, input: ["text"] },
   { id: "nemotron-3.5-lightning-free", name: "Nemotron 3.5 Lightning Free", upstream: "opencode", reasoning: true, contextWindow: 262_144, maxTokens: 262_144, input: ["text"] },
   { id: "big-pickle", name: "Big Pickle", upstream: "opencode", reasoning: true, contextWindow: 200_000, maxTokens: 32_000, input: ["text"] },
-  // ── KiloCode gateway (16) ──
+  // ── KiloCode gateway (15) ──
   { id: "kilo-auto/free", name: "Kilo Auto Free", upstream: "kilo", reasoning: false, contextWindow: 256_000, maxTokens: 10_000, input: ["text"] },
   { id: "stepfun/step-3.7-flash:free", name: "Step 3.7 Flash Free", upstream: "kilo", reasoning: true, contextWindow: 262_144, maxTokens: 262_144, input: ["text", "image"], thinkingFormat: "openrouter" },
   { id: "nvidia/nemotron-3-ultra-550b-a55b:free", name: "Nemotron 3 Ultra Free", upstream: "kilo", reasoning: true, contextWindow: 1_000_000, maxTokens: 65_536, input: ["text"], thinkingFormat: "openrouter" },
@@ -23,7 +25,6 @@ export const ALL_MODELS: ModelDef[] = [
   { id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", name: "Nemotron 3 Nano Omni Free", upstream: "kilo", reasoning: true, contextWindow: 256_000, maxTokens: 65_536, input: ["text", "image"], thinkingFormat: "openrouter" },
   { id: "openrouter/free", name: "OpenRouter Free (auto)", upstream: "kilo", reasoning: false, contextWindow: 200_000, maxTokens: 65_536, input: ["text", "image"] },
   { id: "nvidia/nemotron-3.5-lightning:free", name: "Nemotron 3.5 Lightning Free", upstream: "kilo", reasoning: true, contextWindow: 1_000_000, maxTokens: 65_536, input: ["text"], thinkingFormat: "openrouter" },
-  { id: "nvidia/nemotron-3.5-content-safety:free", name: "Nemotron 3.5 Content Safety Free", upstream: "kilo", reasoning: true, contextWindow: 128_000, maxTokens: 8_192, input: ["text", "image"], thinkingFormat: "openrouter" },
   { id: "inclusionai/ling-3.0-flash-sante:free", name: "Ling 3.0 Flash Sante Free", upstream: "kilo", reasoning: true, contextWindow: 262_144, maxTokens: 32_768, input: ["text"], thinkingFormat: "openrouter" },
   { id: "inclusionai/ling-3.0-flash-fin:free", name: "Ling 3.0 Flash Fin Free", upstream: "kilo", reasoning: true, contextWindow: 262_144, maxTokens: 32_768, input: ["text"], thinkingFormat: "openrouter" },
   { id: "liquid/lfm-2.5-2.6b:free", name: "Liquid LFM 2.5 2.6B Free", upstream: "kilo", reasoning: true, contextWindow: 65_536, maxTokens: 8_192, input: ["text"], thinkingFormat: "openrouter" },
